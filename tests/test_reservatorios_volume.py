@@ -338,10 +338,14 @@ class TestPlotReservoirs:
 
 
 class TestMain:
+    @staticmethod
+    def _mock_fetch_for_year(year):
+        return _make_raw_df(years=(year,), days_per_year=15)
+
     @patch.object(rv, "_fetch_year")
     def test_end_to_end(self, mock_fetch, tmp_path):
         """Full pipeline with mocked network."""
-        mock_fetch.side_effect = lambda y: _make_raw_df(years=(y,), days_per_year=15)
+        mock_fetch.side_effect = self._mock_fetch_for_year
         outfile = tmp_path / "e2e.png"
         rv.main(
             [
@@ -356,7 +360,7 @@ class TestMain:
     @patch.object(rv, "_fetch_year")
     def test_end_to_end_with_cache(self, mock_fetch, tmp_path):
         """Full pipeline with cache enabled, verifying cache is created."""
-        mock_fetch.side_effect = lambda y: _make_raw_df(years=(y,), days_per_year=15)
+        mock_fetch.side_effect = self._mock_fetch_for_year
         outfile = tmp_path / "e2e_cached.png"
 
         # Monkeypatch CACHE_DIR to tmp_path for this test
