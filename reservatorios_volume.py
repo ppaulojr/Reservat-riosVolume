@@ -21,7 +21,9 @@ Examples:
 import argparse
 import sys
 import warnings
+from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,9 +44,41 @@ COL_DATE = "ear_data"
 COL_SUBSYSTEM = "nom_subsistema"
 COL_EAR_PCT = "ear_verif_subsistema_percentual"
 
+# Default cache directory
+CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 
-def download_data(start_year: int, end_year: int) -> pd.DataFrame:
+
+def _cache_path(year: int) -> Path:
+    """Return the local cache file path for a given year."""
+    return CACHE_DIR / f"EAR_DIARIO_SUBSISTEMA_{year}.parquet"
+
+
+def _is_year_complete(year: int) -> bool:
+    """Return True when *year* is strictly in the past (data won't change)."""
+    return year < datetime.now(timezone.utc).year
+
+
+def _fetch_year(year: int) -> pd.DataFrame:
+    """Download a single year's Parquet file from the ONS S3 bucket."""
+    url = f"{BASE_URL}{year}.parquet"
+    response = requests.get(url, verify=False, timeout=90)
+    response.raise_for_status()
+    return pd.read_parquet(BytesIO(response.content), engine="pyarrow")
+
+
+def download_data(
+    start_year: int,
+    end_year: int,
+    *,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
+) -> pd.DataFrame:
     """Download EAR daily data for the given year range.
+
+    Historical (completed) years are cached locally as Parquet files so that
+    subsequent runs do not need to re-download them.  The most recent year
+    (i.e. the current calendar year or later) is always fetched from the
+    network to pick up new daily records.
 
     Parameters
     ----------
@@ -52,24 +86,49 @@ def download_data(start_year: int, end_year: int) -> pd.DataFrame:
         First year to download (inclusive).
     end_year : int
         Last year to download (inclusive).
+    use_cache : bool
+        When *True* (default), read/write a local Parquet cache for years
+        whose data is complete (all past years).
+    cache_dir : Path or None
+        Override the default cache directory (mainly for testing).
 
     Returns
     -------
     pd.DataFrame
         Concatenated dataframe with all downloaded years.
     """
+    _dir = cache_dir if cache_dir is not None else CACHE_DIR
+
+    if use_cache:
+        _dir.mkdir(parents=True, exist_ok=True)
+
     print("🚀 Downloading daily EAR dataset by subsystem...\n")
 
     frames: list[pd.DataFrame] = []
     for year in range(start_year, end_year + 1):
-        url = f"{BASE_URL}{year}.parquet"
+        cached = _dir / f"EAR_DIARIO_SUBSISTEMA_{year}.parquet"
+
+        # Use local cache for completed years when available
+        if use_cache and _is_year_complete(year) and cached.exists():
+            try:
+                df_year = pd.read_parquet(cached, engine="pyarrow")
+                frames.append(df_year)
+                print(f"   {year} ✅ loaded from cache ({len(df_year):,} rows)")
+                continue
+            except Exception:
+                # Corrupted cache – fall through to download
+                pass
+
         print(f"   Trying {year}...")
         try:
-            response = requests.get(url, verify=False, timeout=90)
-            response.raise_for_status()
-            df_year = pd.read_parquet(BytesIO(response.content), engine="pyarrow")
+            df_year = _fetch_year(year)
             frames.append(df_year)
             print(f"      ✅ {year} loaded ({len(df_year):,} rows)")
+
+            # Persist to cache for completed years
+            if use_cache and _is_year_complete(year):
+                df_year.to_parquet(cached, engine="pyarrow", index=False)
+                print(f"      💾 cached → {cached}")
         except Exception as exc:
             print(f"      ❌ Error {year}: {exc}")
 
@@ -235,14 +294,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--start-year",
         type=int,
-        default=2020,
-        help="First year to download (default: 2020)",
+        default=2000,
+        help="First year to download (default: 2000)",
     )
     parser.add_argument(
         "--end-year",
         type=int,
-        default=2026,
-        help="Last year to download (default: 2026)",
+        default=2025,
+        help="Last year to download (default: 2025)",
     )
     parser.add_argument(
         "--output",
@@ -250,13 +309,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Save figure to file instead of displaying (e.g. output.png)",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        help="Disable local cache and always download from network",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point: download → prepare → plot."""
     args = parse_args(argv)
-    df = download_data(args.start_year, args.end_year)
+    df = download_data(
+        args.start_year,
+        args.end_year,
+        use_cache=not args.no_cache,
+    )
     df_agg = prepare_data(df)
     plot_reservoirs(df_agg, output=args.output)
 

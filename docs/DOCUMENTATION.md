@@ -16,11 +16,12 @@ Download → Prepare → Plot
 
 ### 1. Download (`download_data`)
 
-- Iterates over a configurable year range (default 2020–2026).
+- Iterates over a configurable year range (default 2000–2025).
 - For each year, fetches a Parquet file from the ONS public S3 bucket:
   ```
   https://ons-aws-prod-opendata.s3.amazonaws.com/dataset/ear_subsistema_di/EAR_DIARIO_SUBSISTEMA_{YEAR}.parquet
   ```
+- **Caching**: completed (past) years are cached locally in a `.cache/` directory as Parquet files.  On subsequent runs these files are loaded from disk instead of being re-downloaded.  The current calendar year (and any future year) is always fetched from the network so that new daily records are included.
 - Concatenates all years into a single `pandas.DataFrame`.
 - Prints progress to stdout so the user can track long downloads.
 
@@ -41,6 +42,19 @@ Download → Prepare → Plot
   - A *bold smooth curve* showing the 7-day moving average.
 - For the **Sudeste/Centro-Oeste** subsystem, a dashed red line at **65 %** marks a common operational reference threshold.
 - The figure can be saved to disk (`--output`) or displayed interactively.
+
+---
+
+## Caching
+
+The download step uses a local Parquet cache (`.cache/` directory next to the script):
+
+| Year status | Behaviour |
+|---|---|
+| **Past year** (year < current calendar year) | Read from cache if present; otherwise download and save to cache. |
+| **Current or future year** | Always download from the network (data is still being updated). |
+
+Pass `--no-cache` to disable caching entirely and force a full network download.
 
 ---
 
@@ -79,8 +93,21 @@ Brazil's electrical grid is divided into four major subsystems:
 | `pyarrow` | Read Parquet files |
 | `numpy` | Numeric operations (color maps, clipping) |
 | `requests` | HTTP downloads |
+| `pytest` | Test suite |
 
 All versions are pinned to minimum compatible releases in `requirements.txt`.
+
+---
+
+## Testing
+
+Run the full test suite:
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests cover argument parsing, data preparation, subsystem ordering, caching logic, download behaviour (with mocked network), plotting, and end-to-end integration.  All tests use `unittest.mock` and `tmp_path` fixtures so they run offline and leave no side effects.
 
 ---
 
